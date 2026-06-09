@@ -7,11 +7,13 @@ sdk: gradio
 sdk_version: 5.50.0
 python_version: "3.12"
 app_file: app.py
-pinned: false
+pinned: true
 license: apache-2.0
 ---
 
 # 💊 Agentic Pharmacy Triage
+
+**▶ [Try the live demo](https://huggingface.co/spaces/ckhamitkar/agentic-pharmacy-triage)** — pick a synthetic pharmacy message and watch it triage.
 
 A multi-agent **LangGraph** pipeline that triages inbound pharmacy messages and
 **pauses for a licensed pharmacist on anything life-impacting** — *first, do no
@@ -70,7 +72,7 @@ Docker container, or a hosted instance with no code change.
 
 ```bash
 pip install -r requirements.txt
-export MEDGEMMA_URL="https://your-medgemma-endpoint/ask"   # optional override
+export MEDGEMMA_URL="https://your-medgemma-endpoint/generate"   # optional override
 python app.py            # launches the Gradio UI
 ```
 

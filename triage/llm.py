@@ -3,12 +3,12 @@
 The triage pipeline is endpoint-agnostic: it speaks to MedGemma through this
 small client. Point it at any compatible endpoint via env vars:
 
-    MEDGEMMA_URL   default: https://api.axionaiapps.com/ask   (Mini-backed, live)
+    MEDGEMMA_URL   default: https://api.axionaiapps.com/generate  (Mini-backed, live)
     MEDGEMMA_API_KEY  optional bearer token
 
-Swap targets with zero code changes — the live /ask endpoint, the MedGemma
-Docker container running locally, or a Hugging Face Docker Space / Inference
-Endpoint. Only the URL changes.
+Swap targets with zero code changes — the live /generate endpoint (raw MedGemma
+completion, no retrieval), the MedGemma Docker container running locally, or a
+Hugging Face Docker Space / Inference Endpoint. Only the URL changes.
 
 MedGemma is a self-hosted open model, so we don't get native JSON-schema/tool
 calling. Instead we instruct it to emit JSON, extract the JSON block, validate
@@ -25,11 +25,13 @@ from typing import Type, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-DEFAULT_URL = "https://api.axionaiapps.com/ask"
+DEFAULT_URL = "https://api.axionaiapps.com/generate"
 
-# ---- Endpoint contract (the one place to adjust if /ask differs) -------------
-# Request body key that carries the prompt:
-REQUEST_PROMPT_KEY = "prompt"
+# ---- Endpoint contract (the one place to adjust if the endpoint differs) -----
+# Request body key that carries the prompt. The default /generate endpoint
+# expects "prompt"; override via MEDGEMMA_PROMPT_KEY for an endpoint (e.g. a RAG
+# /ask route) that wants "question".
+REQUEST_PROMPT_KEY = os.environ.get("MEDGEMMA_PROMPT_KEY", "prompt")
 # Response keys tried, in order, to find the generated text:
 RESPONSE_TEXT_KEYS = ("response", "answer", "text", "output", "completion", "result")
 
