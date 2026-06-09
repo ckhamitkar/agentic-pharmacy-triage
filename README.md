@@ -52,12 +52,18 @@ flowchart TD
     E -- routine, confident --> G[Critic: adversarial safety review]
     E -- clinical / escalation / P0-P1 / low-confidence --> F[HITL: pharmacist sign-off]
     F --> G
-    G --> H[Triage record + audit trail]
+    G -- caught a missed danger --> F
+    G -- clear --> H[Triage record + audit trail]
 ```
 
 The **hard stop is structural**: clinical / escalation paths *must* pass through
 the human-approval node before the graph can reach `finalize`. It's a gate in the
 edges, not a promise in the README.
+
+The critic is a **second safety net, not a rubber stamp**: if it catches a danger
+the risk screen missed, it routes the case *back* to the pharmacist gate rather
+than finalizing. A `human_decision` guard means a human signs off at most once, so
+the `critic → HITL → critic` path always terminates — no loops.
 
 ## Tech
 

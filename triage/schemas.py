@@ -36,6 +36,26 @@ CLINICAL_CATEGORIES = {
 
 CONFIDENCE_FLOOR = 0.75  # below this, a human reviews regardless of category
 
+# Deterministic safety guard: named controlled substances ALWAYS see a human,
+# regardless of how the LLM classifier labels the message. Recall on these is a
+# legal/safety must, so we do not leave it to a stochastic category call.
+CONTROLLED_SUBSTANCES = {
+    "oxycodone", "oxycontin", "percocet", "hydrocodone", "vicodin", "norco",
+    "hydromorphone", "dilaudid", "morphine", "fentanyl", "codeine", "tramadol",
+    "methadone", "buprenorphine", "suboxone", "adderall", "amphetamine",
+    "ritalin", "methylphenidate", "vyvanse", "xanax", "alprazolam", "ativan",
+    "lorazepam", "klonopin", "clonazepam", "valium", "diazepam", "ambien",
+    "zolpidem", "ketamine", "lyrica", "pregabalin", "phentermine", "testosterone",
+}
+
+
+def find_controlled_substances(text: str) -> list:
+    """Return any controlled-substance terms named in the message (word-boundary match)."""
+    import re
+
+    low = text.lower()
+    return sorted({d for d in CONTROLLED_SUBSTANCES if re.search(rf"\b{re.escape(d)}\b", low)})
+
 
 # --- per-node outputs --------------------------------------------------------
 
@@ -119,15 +139,21 @@ def decide_human_review(classification: Classification, risk: RiskAssessment) ->
     """The HITL trigger rule — recall-first.
 
     A human reviews if ANY of:
+      - the risk screen found any concrete clinical red flag,
       - the category is clinical (incl. controlled substances),
       - severity is emergent/urgent (P0/P1),
       - the risk screen wants escalation,
       - the classifier was not confident.
 
-    We bias toward over-escalation: a missed adverse event costs more than alarm fatigue.
+    The red-flag check is deliberate: if the screen surfaced a concrete danger
+    (e.g. "blurred vision") we route to a human even when the model labels it
+    routine (P2/P3) and forgets to set requires_escalation — recall must not
+    depend on a single stochastic field. A missed adverse event costs more than
+    alarm fatigue; an empty red-flag list (routine refill, admin) still auto-routes.
     """
     return (
-        classification.category in CLINICAL_CATEGORIES
+        bool(risk.red_flags)
+        or classification.category in CLINICAL_CATEGORIES
         or risk.severity in {"P0", "P1"}
         or risk.requires_escalation
         or classification.confidence < CONFIDENCE_FLOOR

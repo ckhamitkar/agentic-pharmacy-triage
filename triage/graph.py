@@ -1,8 +1,10 @@
 """The agentic triage pipeline as a LangGraph StateGraph.
 
     intake -> classify -> risk -> route --(needs human?)--> HITL --> critic -> finalize
-                                              |                         ^
-                                              +----------(auto)---------+
+                                              |                ^        |
+                                              +----(auto)------|--------+
+                                                               |        |
+                                              (critic caught a miss?)---+
 
 Design rationale (the "why"):
   * Why a graph of agents, not one call? It lets us SCALE triage beyond what
@@ -37,6 +39,7 @@ from .schemas import (
     RoutingDecision,
     TriageRecord,
     decide_human_review,
+    find_controlled_substances,
 )
 
 
@@ -102,17 +105,33 @@ def build_graph(client: Optional[MedGemmaClient] = None):
             f"Risk: {risk.severity}; red flags: {risk.red_flags}; escalate: {risk.requires_escalation}",
             RoutingDecision,
         )
-        needs_human = decide_human_review(cls, risk)
+        # Deterministic guard: a named controlled substance always sees a human,
+        # even if the classifier labeled it a routine refill.
+        controlled = find_controlled_substances(state["raw_message"])
+        if controlled:
+            note = f"Controlled substance ({', '.join(controlled)}) — pharmacist dispensing/early-refill review"
+            if note not in risk.red_flags:
+                risk.red_flags.append(note)
+        needs_human = decide_human_review(cls, risk) or bool(controlled)
         reason = "first-do-no-harm: life-impacting / uncertain → pharmacist sign-off" if needs_human else "routine → auto-routed"
         return {
             "routing": out,
+            "risk": risk,
             "requires_human": needs_human,
             "trace": [f"route: -> {out.assignee} ({reason})"],
         }
 
     def hitl_node(state: TriageState) -> dict:
         """Pause for a licensed pharmacist. The graph cannot finalize a clinical
-        decision without passing through here — the hard stop is structural."""
+        decision without passing through here — the hard stop is structural.
+
+        Two ways in: the router sends life-impacting/uncertain cases here, OR the
+        downstream critic catches a danger the risk screen missed and escalates."""
+        crit = state.get("critic")
+        if crit and crit.missed_red_flag:
+            reason = f"Critic caught a possible missed danger ({crit.concern}) — pharmacist review required."
+        else:
+            reason = "Pharmacist review required before this triage is finalized."
         decision = interrupt(
             {
                 "message": state["raw_message"],
@@ -121,21 +140,46 @@ def build_graph(client: Optional[MedGemmaClient] = None):
                 "severity": state["risk"].severity,
                 "red_flags": state["risk"].red_flags,
                 "draft_response": state["routing"].draft_response,
-                "reason": "Pharmacist review required before this triage is finalized.",
+                "reason": reason,
             }
         )
         return {"human_decision": decision, "trace": [f"HITL: pharmacist {decision.get('action', 'reviewed')}"]}
 
     def critic_node(state: TriageState) -> dict:
         out = llm.complete_json(
-            "Adversarially review this triage decision. Did it miss any clinical danger "
-            "in the original message? Be skeptical.\n\n"
+            "You are the LAST safety check before this triage is finalized. The risk "
+            "screen already caught these red flags: "
+            f"{state['risk'].red_flags or 'none'}.\n"
+            "Your ONLY job: is there a CONCRETE clinical danger present in the message "
+            "that is NOT already on that list — a specific symptom, a dangerous drug "
+            "interaction, an adverse reaction, or a self-harm / crisis signal?\n"
+            "Set missed_red_flag=True ONLY if you can name such a specific, concrete "
+            "danger. A routine refill, an admin / billing / insurance question, or any "
+            "message with no clinical symptoms is NOT a missed red flag — set "
+            "missed_red_flag=False and pass it. Do not invent risks; when the message "
+            "is clearly routine, do not flag it.\n\n"
             f"Message: {state['raw_message']}\n"
-            f"Severity: {state['risk'].severity}; red flags: {state['risk'].red_flags}\n"
             f"Routed to: {state['routing'].assignee}",
             CriticResult,
         )
-        return {"critic": out, "trace": [f"critic: missed_red_flag={out.missed_red_flag}"]}
+        # If the critic names a CONCRETE missed danger AND no human has reviewed yet,
+        # it escalates back to the HITL gate (defense in depth). Once a human has
+        # signed off, the critic can only annotate — it cannot loop the case back.
+        escalating = out.missed_red_flag and not state.get("human_decision")
+        suffix = " → escalating to pharmacist" if escalating else ""
+        return {
+            "critic": out,
+            "trace": [f"critic: missed_red_flag={out.missed_red_flag}, recommend_escalate={out.recommend_escalate}{suffix}"],
+        }
+
+    def critic_route(state: TriageState) -> str:
+        """After the critic: a flagged miss with no prior human review goes to the
+        HITL gate; anything else finalizes. The `human_decision` guard makes the
+        critic->hitl->critic path terminate (a human signs off at most once)."""
+        crit = state["critic"]
+        if crit.missed_red_flag and not state.get("human_decision"):
+            return "hitl"
+        return "finalize"
 
     def finalize_node(state: TriageState) -> dict:
         routing, cls, risk = state["routing"], state["classification"], state["risk"]
@@ -173,7 +217,7 @@ def build_graph(client: Optional[MedGemmaClient] = None):
     g.add_edge("risk", "route")
     g.add_conditional_edges("route", needs_human, {"hitl": "hitl", "critic": "critic"})
     g.add_edge("hitl", "critic")
-    g.add_edge("critic", "finalize")
+    g.add_conditional_edges("critic", critic_route, {"hitl": "hitl", "finalize": "finalize"})
     g.add_edge("finalize", END)
 
     return g.compile(checkpointer=MemorySaver())
