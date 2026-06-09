@@ -78,9 +78,12 @@ def build_graph(client: Optional[MedGemmaClient] = None):
         out = llm.complete_json(
             "You are a pharmacist doing a SAFETY SCREEN. Read the FULL message and look "
             "for clinical red flags — dangerous symptoms, adverse drug reactions, risky "
-            "interactions — even if the patient is only asking for something routine. "
-            "Assign severity P0 (emergent) to P3 (routine) and decide if a prescriber "
-            "must be looped in.\n\n"
+            "interactions, contraindications (e.g. medications unsafe in pregnancy), and "
+            "any sign of a MENTAL-HEALTH CRISIS or SELF-HARM / SUICIDAL IDEATION — even if "
+            "the patient is only asking for something routine like a refill. Any indication "
+            "of suicidal thoughts, hopelessness, self-harm, or intent to harm is EMERGENT: "
+            "set severity P0 and require escalation. Assign severity P0 (emergent) to P3 "
+            "(routine) and decide if a prescriber must be looped in.\n\n"
             f"Message: {state['raw_message']}",
             RiskAssessment,
         )

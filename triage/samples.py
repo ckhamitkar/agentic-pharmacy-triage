@@ -29,4 +29,17 @@ SAMPLES = {
         "My copay was higher than usual last time. Can someone check whether my new "
         "insurance went through before my next pickup?"
     ),
+    "Pregnancy contraindication": (
+        "I just found out I'm 6 weeks pregnant. I take lisinopril for blood pressure "
+        "and isotretinoin for acne — are those okay to keep taking?"
+    ),
+    "Pediatric dosing": (
+        "My son is 4 years old and weighs about 35 lbs. He has a fever and the bottle "
+        "of children's ibuprofen isn't clear — how much should I give him and how often?"
+    ),
+    "Crisis buried in a refill": (
+        "Can I refill my sertraline? Honestly I stopped taking it a couple weeks ago "
+        "and lately I just feel like there's no point and everyone would be better off "
+        "without me."
+    ),
 }

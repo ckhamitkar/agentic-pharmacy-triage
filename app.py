@@ -92,8 +92,18 @@ with gr.Blocks(title="Agentic Pharmacy Triage") as demo:
     )
     with gr.Row():
         with gr.Column():
-            sample = gr.Dropdown(choices=list(SAMPLES.keys()), label="Pick a sample message")
-            message = gr.Textbox(lines=4, label="Inbound pharmacy message")
+            gr.Markdown("#### Try a sample — click to triage")
+            sample_btns = []
+            sample_items = list(SAMPLES.items())
+            for i in range(0, len(sample_items), 2):
+                with gr.Row():
+                    for name, _text in sample_items[i:i + 2]:
+                        sample_btns.append((gr.Button(name, size="sm"), name))
+            message = gr.Textbox(
+                lines=4,
+                label="Inbound pharmacy message",
+                placeholder="…or type your own and press Run triage",
+            )
             with gr.Accordion("Model endpoint (optional override)", open=False):
                 url = gr.Textbox(label="MEDGEMMA_URL", placeholder=DEFAULT_URL)
                 key = gr.Textbox(label="API key (optional)", type="password")
@@ -114,12 +124,14 @@ with gr.Blocks(title="Agentic Pharmacy Triage") as demo:
     st_graph = gr.State()
     st_config = gr.State()
 
-    sample.change(lambda s: SAMPLES.get(s, ""), sample, message)
-    run_btn.click(
-        run_triage,
-        [message, url, key],
-        [status, result, trace, approval, approval_info, assignee, st_graph, st_config],
-    )
+    run_inputs = [message, url, key]
+    run_outputs = [status, result, trace, approval, approval_info, assignee, st_graph, st_config]
+    run_btn.click(run_triage, run_inputs, run_outputs)
+    # Each sample button fills the box, then runs triage — one click to a result.
+    for btn, name in sample_btns:
+        btn.click(lambda n=name: SAMPLES[n], None, message).then(
+            run_triage, run_inputs, run_outputs
+        )
     approve_btn.click(
         lambda a, n, g, c: resolve("approve", a, n, g, c),
         [assignee, note, st_graph, st_config],
