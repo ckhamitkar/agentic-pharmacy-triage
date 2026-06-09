@@ -39,6 +39,7 @@ from .schemas import (
     RoutingDecision,
     TriageRecord,
     decide_human_review,
+    detect_crisis,
     find_controlled_substances,
 )
 
@@ -65,7 +66,8 @@ def build_graph(client: Optional[MedGemmaClient] = None):
             f"Extract structured fields from this inbound pharmacy message:\n\n{state['raw_message']}",
             Intake,
         )
-        return {"intake": out, "trace": [f"intake: {out.requested_action} (meds: {', '.join(out.medications) or 'none'})"]}
+        meds = ", ".join(out.medications) or "none"
+        return {"intake": out, "trace": [f"Read the message — request: {out.requested_action}; medications: {meds}"]}
 
     def classify_node(state: TriageState) -> dict:
         out = llm.complete_json(
@@ -75,7 +77,7 @@ def build_graph(client: Optional[MedGemmaClient] = None):
             f"Message: {state['raw_message']}",
             Classification,
         )
-        return {"classification": out, "trace": [f"classify: {out.category} (conf {out.confidence:.2f})"]}
+        return {"classification": out, "trace": [f"Identified intent: {out.category.replace('_', ' ')}"]}
 
     def risk_node(state: TriageState) -> dict:
         out = llm.complete_json(
@@ -90,8 +92,17 @@ def build_graph(client: Optional[MedGemmaClient] = None):
             f"Message: {state['raw_message']}",
             RiskAssessment,
         )
+        # Deterministic crisis floor: self-harm / suicidal ideation is ALWAYS emergent.
+        # The model caught the red flag here but mis-rated severity (P2); we never
+        # leave the most dangerous classification to a stochastic call.
+        if detect_crisis(state["raw_message"]):
+            out.severity = "P0"
+            out.requires_escalation = True
+            if not any(("suicid" in f.lower() or "self-harm" in f.lower() or "self harm" in f.lower()) for f in out.red_flags):
+                out.red_flags.append("Self-harm / suicidal ideation")
         flags = ", ".join(out.red_flags) or "none"
-        return {"risk": out, "trace": [f"risk: {out.severity}, red_flags: {flags}"]}
+        sev_label = {"P0": "emergent", "P1": "urgent", "P2": "elevated", "P3": "routine"}.get(out.severity, out.severity)
+        return {"risk": out, "trace": [f"Safety screen: {out.severity} · {sev_label}; red flags: {flags}"]}
 
     def route_node(state: TriageState) -> dict:
         cls, risk = state["classification"], state["risk"]
@@ -112,13 +123,16 @@ def build_graph(client: Optional[MedGemmaClient] = None):
             note = f"Controlled substance ({', '.join(controlled)}) — pharmacist dispensing/early-refill review"
             if note not in risk.red_flags:
                 risk.red_flags.append(note)
+            # A controlled substance must never default to a technician.
+            if out.assignee == "pharmacy_technician":
+                out.assignee = "pharmacist"
         needs_human = decide_human_review(cls, risk) or bool(controlled)
-        reason = "first-do-no-harm: life-impacting / uncertain → pharmacist sign-off" if needs_human else "routine → auto-routed"
+        reason = "flagged as life-impacting, so it needs a pharmacist's sign-off" if needs_human else "routine, so it was handled automatically"
         return {
             "routing": out,
             "risk": risk,
             "requires_human": needs_human,
-            "trace": [f"route: -> {out.assignee} ({reason})"],
+            "trace": [f"Routed to {out.assignee.replace('_', ' ')} — {reason}"],
         }
 
     def hitl_node(state: TriageState) -> dict:
@@ -143,7 +157,7 @@ def build_graph(client: Optional[MedGemmaClient] = None):
                 "reason": reason,
             }
         )
-        return {"human_decision": decision, "trace": [f"HITL: pharmacist {decision.get('action', 'reviewed')}"]}
+        return {"human_decision": decision, "trace": [f"Pharmacist {decision.get('action', 'reviewed')} the case"]}
 
     def critic_node(state: TriageState) -> dict:
         out = llm.complete_json(
@@ -166,11 +180,11 @@ def build_graph(client: Optional[MedGemmaClient] = None):
         # it escalates back to the HITL gate (defense in depth). Once a human has
         # signed off, the critic can only annotate — it cannot loop the case back.
         escalating = out.missed_red_flag and not state.get("human_decision")
-        suffix = " → escalating to pharmacist" if escalating else ""
-        return {
-            "critic": out,
-            "trace": [f"critic: missed_red_flag={out.missed_red_flag}, recommend_escalate={out.recommend_escalate}{suffix}"],
-        }
+        if out.missed_red_flag:
+            line = "Final safety check: caught a possible missed danger" + (" → escalating to pharmacist" if escalating else "")
+        else:
+            line = "Final safety check: nothing missed — cleared"
+        return {"critic": out, "trace": [line]}
 
     def critic_route(state: TriageState) -> str:
         """After the critic: a flagged miss with no prior human review goes to the
@@ -195,7 +209,7 @@ def build_graph(client: Optional[MedGemmaClient] = None):
             human_reviewed=bool(state.get("human_decision")),
             human_note=decision.get("note", ""),
             draft_response=routing.draft_response,
-            audit_trail=state.get("trace", []) + ["finalize: triage record sealed"],
+            audit_trail=state.get("trace", []) + ["Triage finalized and recorded"],
         )
         return {"final": record.model_dump()}
 

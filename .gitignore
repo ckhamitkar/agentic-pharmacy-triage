@@ -7,3 +7,4 @@ venv/
 *.egg-info/
 .gradio/
 .pytest_cache/
+_serve.log

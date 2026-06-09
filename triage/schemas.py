@@ -57,6 +57,31 @@ def find_controlled_substances(text: str) -> list:
     return sorted({d for d in CONTROLLED_SUBSTANCES if re.search(rf"\b{re.escape(d)}\b", low)})
 
 
+# Self-harm / suicidal-ideation language. A hit here is ALWAYS emergent (P0) — the
+# single most dangerous miss a triage system can make, so we never leave the
+# severity to the stochastic model. Phrase-based to limit false positives.
+CRISIS_PATTERNS = [
+    r"suicid",
+    r"kill(?:ing)?\s+myself",
+    r"end(?:ing)?\s+(?:my\s+life|it\s+all)",
+    r"(?:hurt|harm)(?:ing)?\s+myself",
+    r"self[\s-]?harm",
+    r"better\s+off\s+(?:without\s+me|dead)",
+    r"(?:everyone|everybody)\b.{0,25}better\s+off",
+    r"no\s+(?:reason|point)\s+(?:to|in)\s+(?:live|living|be\s+here|being\s+here)",
+    r"(?:want|wish)\s+(?:to\s+die|i\s+(?:was|were)\s+dead)",
+    r"don'?t\s+want\s+to\s+(?:live|be\s+here)",
+]
+
+
+def detect_crisis(text: str) -> bool:
+    """True if the message contains self-harm / suicidal-ideation language."""
+    import re
+
+    low = text.lower()
+    return any(re.search(p, low) for p in CRISIS_PATTERNS)
+
+
 # --- per-node outputs --------------------------------------------------------
 
 

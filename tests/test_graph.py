@@ -80,6 +80,22 @@ def test_dangerous_path_pauses_for_human():
     assert "__interrupt__" in result  # paused for pharmacist before finalize
 
 
+def test_crisis_forced_to_p0_and_human():
+    """Self-harm language is ALWAYS emergent (P0) and gated to a human, even when
+    the model mis-rates severity (here the stub says P3 routine)."""
+    cls = Classification(category="refill", confidence=0.95, rationale="routine refill")
+    risk = RiskAssessment(severity="P3", red_flags=[], clinical_reasoning="looks routine", requires_escalation=False)
+    graph = build_graph(StubClient(cls, risk))
+    result = graph.invoke(
+        {"raw_message": "refill my sertraline, honestly everyone would be better off without me", "trace": []},
+        _cfg(),
+    )
+    assert "__interrupt__" in result  # crisis must pause for a human
+    p = result["__interrupt__"][0].value
+    assert p["severity"] == "P0"  # deterministic crisis floor overrode the model's P3
+    assert any("suicid" in f.lower() or "self-harm" in f.lower() for f in p["red_flags"])
+
+
 def test_critic_escalates_auto_path_to_human():
     """An auto-routed case (risk screen saw nothing) still gets pulled to a human
     if the downstream critic catches a miss — the critic has teeth."""
